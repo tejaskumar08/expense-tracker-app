@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Tracker</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 20px auto; padding: 10px; }
+        h1, h2 { text-align: center; }
+        form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+        input, select { padding: 10px; font-size: 16px; }
+        button { padding: 10px; background: #4CAF50; color: white; border: none; cursor: pointer; }
+        button:hover { background: #45a049; }
+        ul { list-style: none; padding: 0; }
+        li { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #ccc; }
+        .delete-btn { background: #f44336; color: white; border: none; padding: 5px 10px; cursor: pointer; }
+        .total { font-weight: bold; margin-top: 20px; text-align: right; }
+        .monthly-summary { margin-top: 20px; }
+        .monthly-summary ul { list-style: none; padding: 0; }
+        .monthly-summary li { padding: 10px; background: #f9f9f9; margin-bottom: 5px; }
+        .auth-section { margin-bottom: 20px; text-align: center; }
+        .auth-section button { margin: 5px; }
+        .error { color: red; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <h1>Expense Tracker</h1>
+    <div class="auth-section" id="authSection">
+        <form id="authForm">
+            <input type="email" id="email" placeholder="Email" required>
+            <input type="password" id="password" placeholder="Password" required>
+            <button type="submit" id="signInBtn">Sign In</button>
+            <button type="button" id="signUpBtn">Sign Up</button>
+            <button type="button" id="signOutBtn" style="display: none;">Sign Out</button>
+            <p id="userInfo"></p>
+            <p id="authError" class="error"></p>
+        </form>
+    </div>
+    <form id="expenseForm" style="display: none;">
+        <input type="date" id="date" required>
+        <input type="text" id="description" placeholder="Description (e.g., Coffee)" required>
+        <input type="number" id="amount" placeholder="Amount (e.g., 5.50)" step="0.01" min="0" required>
+        <select id="category">
+            <option value="Food">Food</option>
+            <option value="Transport">Transport</option>
+            <option value="Entertainment">Entertainment</option>
+            <option value="Other">Other</option>
+        </select>
+        <button type="submit">Add Expense</button>
+    </form>
+    <div class="monthly-summary">
+        <h2>Monthly Totals</h2>
+        <ul id="monthlyTotals"></ul>
+    </div>
+    <ul id="expenseList"></ul>
+    <div class="total" id="totalDisplay">Total: Rs.0.00</div>
+    
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+        import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+
+        // Replace with your Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyAHJgHJFkFuwwxV0yO54r9e5rj2k75jgGk",
+            authDomain: "expense-tracker-f7961.firebaseapp.com",
+            projectId: "expense-tracker-f7961",
+            storageBucket: "expense-tracker-f7961.firebasestorage.app",
+            messagingSenderId: "339202341888",
+            appId: "1:339202341888:web:3deec1b5e8c734faf9ece5"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        const authForm = document.getElementById('authForm');
+        const expenseForm = document.getElementById('expenseForm');
+        const expenseList = document.getElementById('expenseList');
+        const totalDisplay = document.getElementById('totalDisplay');
+        const monthlyTotals = document.getElementById('monthlyTotals');
+        const signInBtn = document.getElementById('signInBtn');
+        const signUpBtn = document.getElementById('signUpBtn');
+        const signOutBtn = document.getElementById('signOutBtn');
+        const userInfo = document.getElementById('userInfo');
+        const authError = document.getElementById('authError');
+
+        function renderExpenses(expenses) {
+            expenseList.innerHTML = '';
+            let overallTotal = 0;
+            expenses.forEach((exp) => {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    ${exp.date} - ${exp.description} (${exp.category}): Rs.${exp.amount.toFixed(2)}
+                    <button class="delete-btn" onclick="deleteExpense('${exp.id}')">Delete</button>
+                `;
+                expenseList.appendChild(li);
+                overallTotal += exp.amount;
+            });
+            totalDisplay.textContent = `Total: Rs.${overallTotal.toFixed(2)}`;
+
+            const monthlySums = {};
+            expenses.forEach(exp => {
+                const date = new Date(exp.date);
+                const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+                if (!monthlySums[monthYear]) {
+                    monthlySums[monthYear] = 0;
+                }
+                monthlySums[monthYear] += exp.amount;
+            });
+
+            monthlyTotals.innerHTML = '';
+            Object.keys(monthlySums).sort().forEach(monthYear => {
+                const li = document.createElement('li');
+                li.textContent = `${monthYear}: Rs.${monthlySums[monthYear].toFixed(2)}`;
+                monthlyTotals.appendChild(li);
+            });
+        }
+
+        window.deleteExpense = async (docId) => {
+            const user = auth.currentUser;
+            if (!user) return;
+            await deleteDoc(doc(collection(db, 'expenses', user.uid, 'userExpenses'), docId));
+        };
+
+        async function addExpense(e) {
+            e.preventDefault();
+            const user = auth.currentUser;
+            if (!user) return;
+
+            const date = document.getElementById('date').value;
+            const description = document.getElementById('description').value.trim();
+            const amount = parseFloat(document.getElementById('amount').value);
+            const category = document.getElementById('category').value;
+
+            if (!date || !description || isNaN(amount)) return;
+
+            await addDoc(collection(db, 'expenses', user.uid, 'userExpenses'), {
+                date,
+                description,
+                amount,
+                category,
+                createdAt: new Date()
+            });
+
+            expenseForm.reset();
+        }
+
+        onAuthStateChanged(auth, user => {
+            if (user) {
+                authForm.style.display = 'none';
+                signOutBtn.style.display = 'inline';
+                userInfo.textContent = `Signed in as ${user.email}`;
+                expenseForm.style.display = 'block';
+                onSnapshot(collection(db, 'expenses', user.uid, 'userExpenses'), (snapshot) => {
+                    const expenses = [];
+                    snapshot.forEach(doc => {
+                        expenses.push({ id: doc.id, ...doc.data() });
+                    });
+                    renderExpenses(expenses);
+                });
+            } else {
+                authForm.style.display = 'block';
+                signOutBtn.style.display = 'none';
+                userInfo.textContent = 'Please sign in to access your expenses.';
+                expenseForm.style.display = 'none';
+                expenseList.innerHTML = '';
+                monthlyTotals.innerHTML = '';
+                totalDisplay.textContent = 'Total: Rs.0.00';
+            }
+        });
+
+        authForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                authError.textContent = '';
+            } catch (error) {
+                console.error('Sign-in error:', error);
+                authError.textContent = error.message;
+            }
+        });
+
+        signUpBtn.addEventListener('click', async () => {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            try {
+                await createUserWithEmailAndPassword(auth, email, password);
+                authError.textContent = '';
+            } catch (error) {
+                console.error('Sign-up error:', error);
+                authError.textContent = error.message;
+            }
+        });
+
+        signOutBtn.addEventListener('click', () => {
+            signOut(auth);
+        });
+
+        expenseForm.addEventListener('submit', addExpense);
+    </script>
+</body>
+</html>
